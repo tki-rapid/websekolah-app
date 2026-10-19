@@ -22,7 +22,11 @@ SELECT format('CREATE ROLE ws_tenant_app LOGIN PASSWORD %L NOSUPERUSER NOBYPASSR
 SELECT format('CREATE ROLE ws_platform_app LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS IN ROLE ws_platform_role', :'platform_pw')
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ws_platform_app') \gexec
 
--- the migrator must be able to assign function ownership to ws_definer
+-- The current database admin must be a member of the target owner role before
+-- PostgreSQL permits ALTER DATABASE ... OWNER TO ws_migrator.
+GRANT ws_migrator TO CURRENT_USER;
+
+-- The migrator must be able to assign function ownership to ws_definer.
 GRANT ws_definer TO ws_migrator;
 
 SELECT format('ALTER DATABASE %I OWNER TO ws_migrator', current_database()) \gexec
