@@ -69,6 +69,7 @@ resource "google_sql_database_instance" "pg" {
   depends_on          = [google_service_networking_connection.sql]
 
   settings {
+    edition           = "ENTERPRISE"
     tier              = var.db_tier
     availability_type = var.db_high_availability ? "REGIONAL" : "ZONAL"
     disk_autoresize   = true
