@@ -10,7 +10,7 @@ RUN npm ci --ignore-scripts && npx prisma generate
 FROM deps AS build
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+RUN npm run build && mkdir -p public
 
 # ── app ──
 FROM node:22-bookworm-slim AS runtime
