@@ -22,6 +22,12 @@ SELECT format('CREATE ROLE ws_tenant_app LOGIN PASSWORD %L NOSUPERUSER NOBYPASSR
 SELECT format('CREATE ROLE ws_platform_app LOGIN PASSWORD %L NOSUPERUSER NOBYPASSRLS IN ROLE ws_platform_role', :'platform_pw')
  WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ws_platform_app') \gexec
 
+-- Always reconcile login passwords from Secret Manager. This makes a retry safe if an
+-- earlier bootstrap created roles but failed before completing the script.
+SELECT format('ALTER ROLE ws_migrator PASSWORD %L', :'mig_pw') \gexec
+SELECT format('ALTER ROLE ws_tenant_app PASSWORD %L', :'tenant_pw') \gexec
+SELECT format('ALTER ROLE ws_platform_app PASSWORD %L', :'platform_pw') \gexec
+
 -- The current database admin must be a member of the target owner role before
 -- PostgreSQL permits ALTER DATABASE ... OWNER TO ws_migrator.
 GRANT ws_migrator TO CURRENT_USER;
