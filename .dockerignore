@@ -1,0 +1,11 @@
+node_modules
+.next
+.pgdata
+.env*
+!.env.example
+.git
+coverage
+infra
+docs
+tests
+*.md

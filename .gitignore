@@ -1,0 +1,14 @@
+node_modules
+.next
+.pgdata
+.env
+.env.local
+*.tsbuildinfo
+next-env.d.ts
+src/generated
+coverage
+.terraform
+*.tfstate*
+*.tfvars
+!*.tfvars.example
+.media-dev/

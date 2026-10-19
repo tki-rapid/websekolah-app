@@ -1,0 +1,11 @@
+const port = process.env.TEST_PG_PORT ?? "54329";
+const DB = "websekolah_test";
+(process.env as Record<string, string>).NODE_ENV = "test";
+process.env.APP_URL = "https://app.websekolah.test";
+process.env.DATABASE_URL_TENANT = `postgresql://ws_tenant_app:${process.env.TEST_TENANT_PW ?? "dev-tenant-pw"}@127.0.0.1:${port}/${DB}`;
+process.env.DATABASE_URL_PLATFORM = `postgresql://ws_platform_app:${process.env.TEST_PLATFORM_PW ?? "dev-platform-pw"}@127.0.0.1:${port}/${DB}`;
+process.env.APP_SECRET = Buffer.alloc(32, 7).toString("base64");
+process.env.TOTP_ENC_KEY = Buffer.alloc(32, 9).toString("base64");
+process.env.GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
+process.env.GOOGLE_CLIENT_SECRET = "test-secret";
+process.env.TRUSTED_PROXY_HOPS = "1";

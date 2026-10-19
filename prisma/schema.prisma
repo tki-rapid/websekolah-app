@@ -1,0 +1,574 @@
+// WebSekolah — data model (PRD §12). Every school-owned table carries tenant_id NOT NULL.
+// Row Level Security, partial unique indexes, immutability triggers and role grants live in
+// prisma/migrations/*_security/migration.sql (Prisma cannot express them).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+}
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+}
+
+enum ContentType {
+  news
+  announcement
+  agenda
+  staff
+  facility
+  achievement
+  download
+  gallery
+  profile
+  contact
+  ppdb
+  seo
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
+}
+
+enum DomainStatus {
+  REQUESTED
+  AWAITING_DNS
+  VERIFIED
+  PROVISIONING_TLS
+  ACTIVE
+  FAILED
+}
+
+enum DomainKind {
+  SUBDOMAIN
+  CUSTOM
+}
+
+enum FlagScope {
+  GLOBAL
+  TENANT
+}
+
+enum JobState {
+  QUEUED
+  RUNNING
+  DONE
+  RETRY
+  DEAD
+}
+
+enum ImpersonationMode {
+  READ
+  WRITE
+}
+
+enum MediaVisibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum MediaState {
+  PENDING
+  READY
+  REJECTED
+}
+
+enum MenuItemType {
+  SYSTEM
+  PAGE
+  URL
+}
+
+// ───────────── platform / identity ─────────────
+
+model Tenant {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name               String
+  slug               String       @unique
+  type               String
+  status             TenantStatus @default(PROVISIONING)
+  timezone           String       @default("Asia/Jakarta")
+  // language settings (all plans)
+  enableEn           Boolean      @default(false) @map("enable_en")
+  defaultLang        String       @default("id") @map("default_lang")
+  showLangSwitcher   Boolean      @default(true) @map("show_lang_switcher")
+  // Google Analytics (optional, per school)
+  gaEnabled          Boolean      @default(false) @map("ga_enabled")
+  gaMeasurementId    String?      @map("ga_measurement_id")
+  gaRequireConsent   Boolean      @default(true) @map("ga_require_consent")
+  gaSkipAdmins       Boolean      @default(true) @map("ga_skip_admins")
+  suspendReason      String?      @map("suspend_reason")
+  deletedAt          DateTime?    @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users         User[]
+  invitations   Invitation[]
+  contentItems  ContentItem[]
+  pages         Page[]
+  menuItems     MenuItem[]
+  mediaAssets   MediaAsset[]
+  tenantTheme   TenantTheme?
+  domains       Domain[]
+  subscription  Subscription?
+  invoices      Invoice[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String?   @map("tenant_id") @db.Uuid
+  email         String    @unique // stored lower-cased (CHECK in security migration)
+  name          String
+  role          Role
+  active        Boolean   @default(true)
+  passwordHash  String?   @map("password_hash")
+  authSubject   String?   @unique @map("auth_subject") // Google "sub"
+  totpSecretEnc String?   @map("totp_secret_enc") // AES-256-GCM envelope, never plaintext
+  totpEnabled   Boolean   @default(false) @map("totp_enabled")
+  totpLastStep  BigInt?   @map("totp_last_step") // last accepted 30s step: blocks code replay
+  lastLoginAt   DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  version       Int       @default(1)
+
+  tenant         Tenant?         @relation(fields: [tenantId], references: [id])
+  sessions       Session[]
+  passwordResets PasswordReset[]
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Session {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  tokenHash     String    @unique @map("token_hash") // SHA-256 of the cookie token; raw token is never stored
+  provider      String // 'password' | 'google'
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz(6) // absolute lifetime
+  idleExpiresAt DateTime  @map("idle_expires_at") @db.Timestamptz(6)
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  mfaVerifiedAt DateTime? @map("mfa_verified_at") @db.Timestamptz(6)
+  reauthAt      DateTime? @map("reauth_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  ipHash        String?   @map("ip_hash")
+  userAgent     String?   @map("user_agent")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Invitation {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  email       String
+  tokenHash   String    @unique @map("token_hash")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(6)
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("invitations")
+}
+
+model PasswordReset {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+model RateLimit {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime @default(now()) @map("window_start") @db.Timestamptz(6)
+
+  @@map("rate_limits")
+}
+
+model ImpersonationSession {
+  id        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId   String            @map("actor_id") @db.Uuid
+  tenantId  String            @map("tenant_id") @db.Uuid
+  sessionId String            @map("session_id") @db.Uuid
+  mode      ImpersonationMode @default(READ)
+  reason    String
+  expiresAt DateTime          @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime?         @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId])
+  @@map("impersonation_sessions")
+}
+
+model AuditLog {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String?  @map("tenant_id") @db.Uuid // no FK: audit must outlive tenant purge
+  actorId         String?  @map("actor_id") @db.Uuid
+  actorEmail      String   @map("actor_email")
+  effectiveUserId String?  @map("effective_user_id") @db.Uuid
+  action          String
+  resource        String
+  result          String   @default("success")
+  reason          String?
+  ip              String?
+  requestId       String?  @map("request_id")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([tenantId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// ───────────── catalogue: themes, plans, flags ─────────────
+
+model Theme {
+  id       String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key      String         @unique
+  name     String
+  versions ThemeVersion[]
+
+  @@map("themes")
+}
+
+model ThemeVersion {
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  themeId         String  @map("theme_id") @db.Uuid
+  version         Int
+  schema          Json
+  allowedVariants Json    @map("allowed_variants")
+  active          Boolean @default(true)
+
+  theme        Theme         @relation(fields: [themeId], references: [id])
+  tenantThemes TenantTheme[]
+
+  @@unique([themeId, version])
+  @@map("theme_versions")
+}
+
+model Plan {
+  id       String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code     String        @unique
+  name     String
+  versions PlanVersion[]
+
+  @@map("plans")
+}
+
+model PlanVersion {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  planId    String          @map("plan_id") @db.Uuid
+  version   Int
+  interval  BillingInterval
+  amount    Int // IDR, integer rupiah, >= 0 (CHECK)
+  currency  String          @default("IDR")
+  quotas    Json
+  features  Json
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  plan          Plan           @relation(fields: [planId], references: [id])
+  subscriptions Subscription[]
+
+  @@unique([planId, version, interval])
+  @@map("plan_versions")
+}
+
+model FeatureFlag {
+  id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key      String
+  scope    FlagScope
+  tenantId String?   @map("tenant_id") @db.Uuid
+  enabled  Boolean
+
+  @@map("feature_flags")
+}
+
+// ───────────── tenant-owned data ─────────────
+
+model ContentItem {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String      @map("tenant_id") @db.Uuid
+  type             ContentType
+  slug             String
+  draftPayload     Json        @map("draft_payload")
+  publishedPayload Json?       @map("published_payload")
+  publishedAt      DateTime?   @map("published_at") @db.Timestamptz(6)
+  position         Int         @default(0)
+  version          Int         @default(1)
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt        DateTime?   @map("deleted_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, type, slug])
+  @@unique([tenantId, id])
+  @@index([tenantId, type, publishedAt])
+  @@map("content_items")
+}
+
+model Page {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  slug            String
+  title           String
+  isHome          Boolean  @default(false) @map("is_home")
+  draftBlocks     Json     @map("draft_blocks")
+  publishedBlocks Json?    @map("published_blocks")
+  seo             Json     @default("{}")
+  translations    Json     @default("{}") // { en: { title, seoTitle, seoDesc } }
+  version         Int      @default(1)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  menuItems MenuItem[] @relation("MenuTargetPage")
+
+  @@unique([tenantId, slug])
+  @@unique([tenantId, id])
+  @@map("pages")
+}
+
+model MenuItem {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  parentId     String?      @map("parent_id") @db.Uuid
+  label        String
+  labelEn      String?      @map("label_en")
+  type         MenuItemType
+  targetPageId String?      @map("target_page_id") @db.Uuid
+  systemTarget String?      @map("system_target")
+  url          String?
+  position     Int          @default(0)
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  parent     MenuItem?  @relation("MenuTree", fields: [tenantId, parentId], references: [tenantId, id])
+  children   MenuItem[] @relation("MenuTree")
+  targetPage Page?      @relation("MenuTargetPage", fields: [tenantId, targetPageId], references: [tenantId, id])
+
+  @@unique([tenantId, id])
+  @@index([tenantId, parentId, position])
+  @@map("menu_items")
+}
+
+model MediaAsset {
+  id         String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String          @map("tenant_id") @db.Uuid
+  objectKey  String          @unique @map("object_key") // random key, prefixed with tenant id
+  name       String
+  mime       String
+  bytes      BigInt
+  visibility MediaVisibility @default(PRIVATE)
+  state      MediaState      @default(PENDING)
+  checksum   String?
+  alt        String          @default("")
+  thumbKey        String?    @map("thumb_key")
+  width           Int?
+  height          Int?
+  uploadExpiresAt DateTime?  @map("upload_expires_at") @db.Timestamptz(6)
+  originalName    String?    @map("original_name")
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id])
+  references MediaReference[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, state])
+  @@map("media_assets")
+}
+
+model MediaReference {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  assetId   String @map("asset_id") @db.Uuid
+  ownerType String @map("owner_type")
+  ownerId   String @map("owner_id")
+  snapshot  Json?
+
+  asset MediaAsset @relation(fields: [tenantId, assetId], references: [tenantId, id])
+
+  @@index([tenantId, assetId])
+  @@map("media_references")
+}
+
+model TenantTheme {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String   @unique @map("tenant_id") @db.Uuid
+  themeVersionId String   @map("theme_version_id") @db.Uuid
+  tokens         Json     @default("{}")
+  layout         Json     @default("{}")
+  previousConfig Json?    @map("previous_config")
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  themeVersion ThemeVersion @relation(fields: [themeVersionId], references: [id])
+
+  @@map("tenant_themes")
+}
+
+model Domain {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String       @map("tenant_id") @db.Uuid
+  hostname   String       @unique // lower-case, no port, punycode (CHECK in security migration)
+  primary    Boolean      @default(false)
+  kind       DomainKind
+  status     DomainStatus @default(REQUESTED)
+  verifyHash String?      @map("verify_hash")
+  verifiedAt DateTime?    @map("verified_at") @db.Timestamptz(6)
+  tlsState   String       @default("none") @map("tls_state")
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("domains")
+}
+
+model Subscription {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String             @unique @map("tenant_id") @db.Uuid
+  planVersionId String             @map("plan_version_id") @db.Uuid
+  status        SubscriptionStatus @default(PENDING)
+  periodStart   DateTime           @map("period_start") @db.Timestamptz(6)
+  periodEnd     DateTime           @map("period_end") @db.Timestamptz(6)
+  graceUntil    DateTime?          @map("grace_until") @db.Timestamptz(6)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id])
+  planVersion PlanVersion @relation(fields: [planVersionId], references: [id])
+  invoices    Invoice[]
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  subscriptionId String          @map("subscription_id") @db.Uuid
+  number         String          @unique
+  planName       String          @map("plan_name") // price/plan snapshot
+  interval       BillingInterval
+  amount         Int
+  currency       String          @default("IDR")
+  status         InvoiceStatus   @default(DRAFT)
+  periodStart    DateTime        @map("period_start") @db.Timestamptz(6)
+  periodEnd      DateTime        @map("period_end") @db.Timestamptz(6)
+  dueAt          DateTime        @map("due_at") @db.Timestamptz(6)
+  issuedAt       DateTime?       @map("issued_at") @db.Timestamptz(6)
+  paidAt         DateTime?       @map("paid_at") @db.Timestamptz(6)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  payment      Payment?
+
+  @@index([tenantId, status])
+  @@map("invoices")
+}
+
+model Payment {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  invoiceId  String   @unique @map("invoice_id") @db.Uuid
+  reference  String   @unique
+  amount     Int
+  verifierId String   @map("verifier_id") @db.Uuid
+  note       String?
+  paidAt     DateTime @default(now()) @map("paid_at") @db.Timestamptz(6)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("payments")
+}
+
+model AnalyticsDaily {
+  id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String   @map("tenant_id") @db.Uuid
+  date     DateTime @db.Date
+  pageKey  String   @map("page_key")
+  views    Int      @default(0)
+
+  @@unique([tenantId, date, pageKey])
+  @@map("analytics_daily")
+}
+
+model Job {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String?   @map("tenant_id") @db.Uuid
+  type        String
+  payload     Json      @default("{}")
+  dedupeKey   String    @unique @map("dedupe_key")
+  attempts    Int       @default(0)
+  state       JobState  @default(QUEUED)
+  availableAt DateTime  @default(now()) @map("available_at") @db.Timestamptz(6)
+  lockedAt    DateTime? @map("locked_at") @db.Timestamptz(6)
+  lastError   String?   @map("last_error")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([state, availableAt])
+  @@map("jobs")
+}
+
+model Outbox {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String?   @map("tenant_id") @db.Uuid
+  topic       String
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  processedAt DateTime? @map("processed_at") @db.Timestamptz(6)
+
+  @@index([processedAt, createdAt])
+  @@map("outbox")
+}
+
+model IdempotencyKey {
+  key       String
+  scope     String
+  actorId   String?  @map("actor_id") @db.Uuid
+  result    Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([key, scope])
+  @@map("idempotency_keys")
+}

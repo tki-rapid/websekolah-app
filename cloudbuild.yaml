@@ -1,0 +1,40 @@
+# Cloud Build: build → push → run DB migrations (Cloud Run Job, owner login) → deploy to Cloud Run.
+# Trigger it from your repo (substitutions have defaults; override per environment).
+substitutions:
+  _REGION: asia-southeast2          # Jakarta
+  _REPO: websekolah
+  _SERVICE: websekolah-app
+  _MIGRATE_JOB: websekolah-migrate
+  _TAG: bootstrap                  # triggers override with _TAG=$SHORT_SHA
+options:
+  logging: CLOUD_LOGGING_ONLY
+steps:
+  - id: build-app
+    name: gcr.io/cloud-builders/docker
+    args: [build, --target, runtime, -t, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}", .]
+  - id: build-migrate
+    name: gcr.io/cloud-builders/docker
+    args: [build, --target, migrate, -t, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/migrate:${_TAG}", .]
+  - id: build-bootstrap
+    name: gcr.io/cloud-builders/docker
+    args: [build, --target, bootstrap, -t, "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/bootstrap:bootstrap", .]
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ["-c", "docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG} && docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/migrate:${_TAG} && docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/bootstrap:bootstrap"]
+  - id: migrate   # skipped automatically on the first build because the job/service do not exist yet (see docs/GCP-SETUP.md)
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        gcloud run jobs update ${_MIGRATE_JOB} --region=${_REGION} --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/migrate:${_TAG}
+        gcloud run jobs execute ${_MIGRATE_JOB} --region=${_REGION} --wait
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args: ["run", "deploy", "${_SERVICE}", "--region=${_REGION}", "--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}"]
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:${_TAG}"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/migrate:${_TAG}"
