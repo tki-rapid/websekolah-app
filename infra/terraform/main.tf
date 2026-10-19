@@ -7,8 +7,11 @@ locals {
   repo    = "${var.region}-docker.pkg.dev/${var.project_id}/websekolah"
   db_ip   = google_sql_database_instance.pg.private_ip_address
   db_name = "websekolah"
-  db_url  = { for r, pw in local.db_pw : r => "postgresql://${r}:${urlencode(pw)}@${local.db_ip}:5432/${local.db_name}?sslmode=require" }
-  db_pw   = { ws_migrator = random_password.mig.result, ws_tenant_app = random_password.tenant.result, ws_platform_app = random_password.platform.result }
+  # Prisma's Node pg adapter follows stricter TLS verification than libpq. Cloud SQL's
+  # private-IP endpoint uses an internal CA, so preserve encrypted transport while
+  # selecting libpq-compatible `require` semantics for application role URLs.
+  db_url = { for r, pw in local.db_pw : r => "postgresql://${r}:***@${local.db_ip}:5432/${local.db_name}?uselibpqcompat=true&sslmode=require" }
+  db_pw  = { ws_migrator = random_password.mig.result, ws_tenant_app = random_password.tenant.result, ws_platform_app = random_password.platform.result }
 }
 
 resource "google_project_service" "apis" {
